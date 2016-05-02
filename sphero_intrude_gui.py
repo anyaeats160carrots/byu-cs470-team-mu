@@ -108,8 +108,11 @@ class RepulsiveField(PotentialField):
 		self.bigNum = 9001.0
             
 	def getVelocityChange(self, robotLocation):
+        angle = super(getAngleTo(robotLocation))
+        return getVelocityChange(robotLocation, angle)
+        
+    def getVelocityChange(self, robotLocation, angle)
 		d = super(getDistanceTo(robotLocation))
-		angle = super(getAngleTo(robotLocation))
 		deltaX = 0
 		deltaY = 0
 		if (d < self.radius):
@@ -121,23 +124,10 @@ class RepulsiveField(PotentialField):
 		return {'x': deltaX, 'y': deltaY}
         
 class CircularField(RepulsiveField):
-    
-    def __init__(self):
-		self.s = 60.0
-            
+               
     def getVelocityChange(self, robotLocation):
-		d = super(getDistanceTo(robotLocation))
-		angle = super(getAngleTo(robotLocation))
-        h = d*math.cos(90 - angle)*math.sin(90 - angle)
-		deltaX = 0
-		deltaY = 0
-		if (d < self.radius):
-			deltaX = -1*(math.cos(angle)/math.fabs(math.cos(angle)))*self.bigNum
-			deltaY = -1*(math.sin(angle)/math.fabs(math.sin(angle)))*self.bigNum
-		elif (self.radius <= d and d <= self.s + self.radius): #magic happens here
-			deltaX = -1*self.beta*(self.s + self.radius - d)*h*cos(90-angle)
-			deltaX = -1*self.beta*(self.s + self.radius - d)*h*sin(90-angle)
-		return {'x': deltaX, 'y': deltaY}
+		angle = super(getAngleTo(robotLocation)) + math.pi/2.0
+        return getVelocityChange(robotLocation, angle)
         
 
 class SpheroIntrudeForm(QtGui.QWidget):
