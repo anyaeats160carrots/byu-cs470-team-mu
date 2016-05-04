@@ -7,39 +7,119 @@ from std_msgs.msg import ColorRGBA, Float32, Bool
 from apriltags_intrude_detector.srv import apriltags_intrude
 from apriltags_intrude_detector.srv import apriltags_info
 
+class PotentialField:
+    
+	def __init__(self, points):
+		self.angle=0.0
+		self.defaultAngle=0.0
+		self.points = points
+		xSum = 0.0
+		ySum = 0.0		
+		for point in points:
+			xSum += point.x	
+			ySum += point.y
+		xSum /= 4.0
+		ySum /= 4.0
+		self.centerPoint = {'x': xSum, 'y': ySum}
+		self.power = 0
+		self.radius = math.sqrt(math.pow(points[0].x - self.centerPoint['x'], 2) + math.pow(points[0].y - self.centerPoint['y'], 2) )
+
+	def getDistanceTo(self, robotLocation):
+		return math.sqrt( math.pow(robotLocation.x - self.centerPoint['x'], 2) + math.pow(robotLocation.y - self.centerPoint['y'], 2) )
+
+	def getAngleTo(self, robotLocation):
+		return math.atan2(float(-1*(self.centerPoint['y'] - robotLocation.y)), float(self.centerPoint['x'] - robotLocation.x))
+        
+class AttractiveField(PotentialField):
+
+	def __init__(self, points):
+		print "in the constructor"
+		
+		PotentialField.__init__(self, points)
+		print " called base constructor"
+		self.alpha = 1.5
+		
+    
+	def getVelocityChange(self, robotLocation):
+		d = PotentialField.getDistanceTo(self, robotLocation)
+		if (d < self.radius):
+			print "inside goal"
+			print self.radius
+			
+			return {'x': 0, 'y': 0}
+		else:
+			self.angle += PotentialField.getAngleTo(self, robotLocation)
+			deltaX = self.alpha*(d - self.radius)*math.cos(self.angle)
+			deltaY = self.alpha*(d - self.radius)*math.sin(self.angle)
+			self.angle=self.defaultAngle
+			return {'x': deltaX, 'y': deltaY}
+            
+    
+class RepulsiveField(PotentialField):	
+    	 	
+	def __init__(self, points):
+		PotentialField.__init__(self,points)
+		self.beta = 1.0
+		self.s = 60.0
+		self.bigNum = 9001.0
+		self.radius*=1.5
+        
+	def getVelocityChange(self, robotLocation):
+		d = PotentialField.getDistanceTo(self, robotLocation)
+		self.angle += PotentialField.getAngleTo(self, robotLocation)
+		deltaX = 0
+		deltaY = 0
+		if (d < self.radius):
+			print "inside repulsive field"
+			print self.radius
+			deltaX = -1*(math.cos(self.angle)/math.fabs(math.cos(self.angle)))*self.bigNum
+			deltaY = -1*(math.sin(self.angle)/math.fabs(math.sin(self.angle)))*self.bigNum
+		elif (self.radius <= d and d <= self.s + self.radius):
+			deltaX = -1*self.beta*(self.s + self.radius - d)*math.cos(self.angle)
+			deltaX = -1*self.beta*(self.s + self.radius - d)*math.sin(self.angle)
+		self.angle = self.defaultAngle
+		return {'x': deltaX, 'y': deltaY}
+
+class TangentalField(RepulsiveField):
+	def __init__(self, points):
+		RepulsiveField.__init__(self, points)
+		self.defaultAngle = math.pi/2
+		self.angle+=self.defaultAngle
 
 # You implement this class
 class Controller:
     stop = True # This is set to true when the stop button is pressed
     fields = []
-
+	
     def __init__(self):
         self.cmdVelPub = rospy.Publisher('cmd_vel', Twist, queue_size=1)
         self.trackposSub = rospy.Subscriber("tracked_pos", Pose2D, self.trackposCallback)
+
+    def getVelocityChange(self, robotLocation):
+        deltaX = 0
+        deltaY = 0
+        for field in self.fields:
+            delta = field.getVelocityChange(robotLocation)
+            #print "Individual field return: " + str(delta)
+            deltaX += delta['x']
+            deltaY += delta['y']
+        return {'x': deltaX, 'y': deltaY}
 
     def trackposCallback(self, msg):
         # This function is continuously called
         if not self.stop:
             twist = Twist()
-            vel = getVelocityChange(msg)
+            vel = self.getVelocityChange(msg)
+            #print "Velocity: " + str(vel)
             # Change twist.linear.x to be your desired x velocity
-            twist.linear.x = vel.x
+            twist.linear.x = vel['x']
             # Change twist.linear.y to be your desired y velocity
-            twist.linear.y = vel.y
+            twist.linear.y = vel['y']
             twist.linear.z = 0
             twist.angular.x = 0
             twist.angular.y = 0
             twist.angular.z = 0
             self.cmdVelPub.publish(twist)
-    
-    def getVelocityChange(self, robotLocation):
-        deltaX = 0
-        deltaY = 0
-        for field in fields:
-            delta = field.getVelocityChange(robotLocation)
-            deltaX += delta.x
-            deltaY += delta.y
-        return {'x': deltaX, 'y': deltaY}
 
     def start(self):
         rospy.wait_for_service("apriltags_info")
@@ -52,10 +132,14 @@ class Controller:
                 poly = resp.polygons[i]
                 # The polygon's id (just an integer, 0 is goal, all else is bad)
                 t_id = resp.ids[i]
-		if (int(t_id) == 0): 
-                    fiedls.append(attractiveField(poly.points, int(t_id)))
+                print "ind of polygons" + str(i)
+                if (int(t_id) == 0): 
+                    print "calling attr field constructor"   
+                    self.fields.append(AttractiveField(poly.points))
+                elif (int(t_id) == 2):
+                    self.fields.append(TangentalField(poly.points))
                 else:
-                    fiedls.append(repulsiveField(poly.points, int(int_id)))
+                    self.fields.append(RepulsiveField(poly.points))
         except Exception, e:
             print "Exception: " + str(e)
         finally:
@@ -64,71 +148,6 @@ class Controller:
     def stop(self):
         self.stop = True
 
-class PotentialField:
-    
-	def __init__(self, points, t_id):
-		xSum = 0.0
-		ySum = 0.0		
-		for point in points:
-			xSum += point.x	
-			ySum += point.y
-		xSum /= 4.0
-		ySum /= 4.0
-		self.centerPoint = {'x': xSum, 'y': ySum}
-		self.power = 0
-        	self.t_id = t_id
-        	self.radius = math.fabs(points[0] - points[1]) #get better radius
-
-	def getDistanceTo(self, robotLocation):
-		return math.sqrt( math.pow(robotLocation.x - self.centerPoint.x, 2) + math.pow(robotLocation.y - self.centerPoint.y, 2) )
-
-	def getAngleTo(self, robotLocation):
-		return math.atan2(float(self.centerPoint.y - robotLocation.y) / float(self.centerPoint.x - robotLocation.x))
-        
-class AttractiveField(PotentialField):
-
-	def __init__(self):
-		self.alpha = 2.0
-    
-	def getVelocityChange(self, robotLocation):
-		d = super(getDistanceTo(robotLocation))
-		if (d < self.radius):
-			return {'x': 0, 'y': 0}
-		else:
-			angle = super(getAngleTo(robotLocation))
-			deltaX = self.alpha*(d - self.radius)*math.cos(angle)
-			deltaY = self.alpha*(d - self.radius)*math.sin(angle)
-			return {'x': deltaX, 'y': deltaY}
-              
-class RepulsiveField(PotentialField):	
-    	 	
-	def __init__(self):
-		self.beta = 1.0
-		self.s = 60.0
-		self.bigNum = 9001.0
-            
-	def getVelocityChange(self, robotLocation):
-        angle = super(getAngleTo(robotLocation))
-        return getVelocityChange(robotLocation, angle)
-        
-    def getVelocityChange(self, robotLocation, angle)
-		d = super(getDistanceTo(robotLocation))
-		deltaX = 0
-		deltaY = 0
-		if (d < self.radius):
-			deltaX = -1*(math.cos(angle)/math.fabs(math.cos(angle)))*self.bigNum
-			deltaY = -1*(math.sin(angle)/math.fabs(math.sin(angle)))*self.bigNum
-		elif (self.radius <= d and d <= self.s + self.radius):
-			deltaX = -1*self.beta*(self.s + self.radius - d)*math.cos(angle)
-			deltaX = -1*self.beta*(self.s + self.radius - d)*math.sin(angle)
-		return {'x': deltaX, 'y': deltaY}
-        
-class CircularField(RepulsiveField):
-               
-    def getVelocityChange(self, robotLocation):
-		angle = super(getAngleTo(robotLocation)) + math.pi/2.0
-        return getVelocityChange(robotLocation, angle)
-        
 
 class SpheroIntrudeForm(QtGui.QWidget):
     controller = Controller()
